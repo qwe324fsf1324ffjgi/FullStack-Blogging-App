@@ -1,12 +1,13 @@
+# Deployment
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: bloggingapp-deployment
 spec:
+  replicas: 2
   selector:
     matchLabels:
       app: bloggingapp
-  replicas: 2
   template:
     metadata:
       labels:
@@ -14,22 +15,58 @@ spec:
     spec:
       containers:
         - name: bloggingapp
-          image: adijaiswal/bloggingapp:latest # Updated image to private DockerHub image
+          image: adijaiswal/bloggingapp:latest
           imagePullPolicy: Always
           ports:
             - containerPort: 8080
       imagePullSecrets:
-        - name: regcred # Reference to the Docker registry secret
+        - name: regcred
+
 ---
+# Internal ClusterIP Service
 apiVersion: v1
 kind: Service
 metadata:
-  name: bloggingapp-ssvc
+  name: bloggingapp-service
+  labels:
+    app: bloggingapp
 spec:
+  type: ClusterIP
   selector:
     app: bloggingapp
   ports:
-    - protocol: "TCP"
+    - protocol: TCP
       port: 80
-      targetPort: 8080 
-  type: LoadBalancer
+      targetPort: 8080
+
+---
+# Ingress for HTTPS and Domain
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: bloggingapp-ingress
+  annotations:
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS": 443}]'
+    alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:REGION:ACCOUNT_ID:certificate/YOUR_CERT_ID
+    alb.ingress.kubernetes.io/ssl-redirect: '443'
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/backend-protocol: HTTP
+    alb.ingress.kubernetes.io/group.name: bloggingapp
+    kubernetes.io/ingress.class: alb
+spec:
+  rules:
+    - host: yourdomain.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: bloggingapp-service
+                port:
+                  number: 80
+  tls:
+    - hosts:
+        - yourdomain.com
+      secretName: dummy-tls-secret # Required even if not used by ALB (can be empty)
