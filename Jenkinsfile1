@@ -1,29 +1,100 @@
-pipeline { 
-    agent { label 'slave-1'}
-    
-    tools {
-        maven 'maven3'
-        jdk 'jdk17'
+pipeline {
+    agent any
+
+    environment {
+        // Set environment variables (if needed)
     }
 
     stages {
-        
-        stage('Compile') {
+        // Stage for building the application
+        stage('Build') {
             steps {
-            sh  "mvn compile"
+                sh 'mvn package'
             }
         }
-        
-        stage('Test') {
+
+        // Stage for publishing artifacts
+        stage('Publish Artifacts') {
             steps {
-                sh "mvn test"
+                withMaven(globalMavenSettingsConfig: 'maven-settings', jdk: 'jdk17', maven: 'maven3', mavenSettingsConfig: 'maven-settings') {
+                    sh 'mvn deploy'
+                }
             }
         }
-        
-        stage('Package') {
+
+        // Stage for building and tagging Docker image
+        stage('Docker Build & Tag') {
             steps {
-                sh "mvn package"
+                script {
+                    withDockerRegistry(credentialsId: 'docker-cred', toolName: 'docker') {
+                        sh 'docker build -t adijaiswal/bloggingapp:latest .'
+                    }
+                }
+            }
+        }
+
+        // Stage for pushing the Docker image
+        stage('Docker Push Image') {
+            steps {
+                script {
+                    withDockerRegistry(credentialsId: 'docker-cred', toolName: 'docker') {
+                        sh 'docker push adijaiswal/bloggingapp:latest'
+                    }
+                }
+            }
+        }
+
+        // Stage for deploying to Kubernetes (DB Deploy)
+        stage('DB Deploy') {
+            steps {
+                withKubeConfigCredentials(certificate: '...', clusterName: 'devops-shack-cluster', contextName: '...', 
+                                          credentialsId: 'k8s-cred', namespace: 'default') {
+                    sh 'kubectl apply -f deployment-service.yaml'
+                }
+                sleep 20
+            }
+        }
+
+        // Stage for verifying the deployment
+        stage('Verify the Deployment') {
+            steps {
+                withKubeConfigCredentials(certificate: '...', clusterName: 'devops-shack-cluster', contextName: '...', 
+                                          credentialsId: 'k8s-cred', namespace: 'default') {
+                    sh 'kubectl rollout status deployment/bloggingapp'
+                }
             }
         }
     }
+
+    post {
+        always {
+            script {
+                def jobName = env.JOB_NAME
+                def buildNumber = env.BUILD_NUMBER
+                def pipelineStatus = currentBuild.result ?: 'UNKNOWN'
+                def bannerColor = pipelineStatus.toUpperCase() == 'SUCCESS' ? 'green' : 'red'
+                def body = """
+                    <html>
+                    <body>
+                        <h2 style="border: 4px solid $bannerColor; padding: 10px;">
+                            ${jobName} - Build ${buildNumber}
+                        </h2>
+                        <div style="background-color: $bannerColor; padding: 18px;">
+                            <h3 style="color: white;">Pipeline Status: ${pipelineStatus.toUpperCase()}</h3>
+                        </div>
+                        <p>Check the <a href="${BUILD_URL}">console output</a>.</p>
+                    </body>
+                    </html>
+                """
+            }
+            emailext(
+                subject: "${jobName} - Build ${buildNumber} - ${pipelineStatus.toUpperCase()}",
+                body: body,
+                to: 'jaiswaledi246@gmail.com',
+                replyTo: 'jenkinsexample@example.com',
+                mimeType: 'text/html'
+            )
+        }
+    }
 }
+
